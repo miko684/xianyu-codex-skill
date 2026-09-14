@@ -43,9 +43,22 @@ PHONE_OPERATIONS = {
     "type_text": "android_type_append_text",
     "open_app": "android_open_app",
     "batch_touch": "android_batch_touch",
+    "group_touch": "android_group_broadcast_touch",
+    "group_broadcast_touch": "android_group_broadcast_touch",
 }
 
-WRITE_OPERATIONS = {"upload_media", "publish_listing", "publish", "tap", "type_text", "batch_touch"}
+WRITE_OPERATIONS = {
+    "upload_media",
+    "publish_listing",
+    "publish",
+    "tap",
+    "type_text",
+    "batch_touch",
+    "group_touch",
+    "group_broadcast_touch",
+}
+
+DEFAULT_VISUAL_TOOL = "android_get_screen_state"
 
 
 class DispatchError(RuntimeError):
@@ -85,7 +98,11 @@ def classify_task(task: Mapping[str, Any]) -> RouteDecision:
         raise DispatchError("force_route must be api, phonecontrol, or hybrid")
 
     api_operation = API_OPERATIONS.get(operation)
-    phone_tool = str(task.get("phone_tool") or PHONE_OPERATIONS.get(operation) or "").strip() or None
+    phone_stage = task.get("phone_stage")
+    phone_stage_tool = phone_stage.get("tool") if isinstance(phone_stage, Mapping) else None
+    phone_tool = str(
+        task.get("phone_tool") or phone_stage_tool or PHONE_OPERATIONS.get(operation) or ""
+    ).strip() or None
     ui_required = any(
         _truthy(task.get(key))
         for key in (
@@ -125,6 +142,8 @@ def classify_task(task: Mapping[str, Any]) -> RouteDecision:
         )
 
     if api_operation and ui_required:
+        if phone_tool is None:
+            phone_tool = DEFAULT_VISUAL_TOOL
         return RouteDecision(
             ROUTE_HYBRID,
             "use the API for structured work, then phonecontrol for the required visual step",
@@ -228,13 +247,30 @@ class PhoneControlMcpAdapter:
             raise DispatchError("set PHONECONTROL_MCP_ENDPOINT and PHONECONTROL_MCP_TOKEN")
         return cls(endpoint, token)
 
-    def call_tool(self, tool_name: str, arguments: Mapping[str, Any]) -> Any:
+    def list_tools(self) -> List[str]:
+        """Discover the tools exposed by the configured MCP endpoint.
+
+        This is intentionally opt-in: route planning must remain fast and
+        offline, while callers that need runtime verification can check the
+        actual Android MCP build before executing a task.
+        """
         payload = {
             "jsonrpc": "2.0",
             "id": next(self._ids),
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": dict(arguments)},
+            "method": "tools/list",
+            "params": {},
         }
+        result = self._request(payload)
+        tools = result.get("tools") if isinstance(result, Mapping) else None
+        if not isinstance(tools, list):
+            raise DispatchError("phonecontrol MCP returned an invalid tools/list response")
+        names = []
+        for item in tools:
+            if isinstance(item, Mapping) and isinstance(item.get("name"), str):
+                names.append(item["name"])
+        return names
+
+    def _request(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urlrequest.Request(
             self.endpoint + "/mcp",
@@ -253,11 +289,34 @@ class PhoneControlMcpAdapter:
             raise DispatchError("phonecontrol MCP request failed") from exc
         try:
             result = json.loads(raw)
-        except ValueError as exc:
-            raise DispatchError("phonecontrol MCP returned a non-JSON response") from exc
+        except ValueError:
+            # Some MCP servers answer with a single SSE data frame even when
+            # the client asked for JSON. Do not log the raw body because it
+            # may contain tool output or sensitive device data.
+            data_lines = [line[5:].strip() for line in raw.splitlines() if line.startswith("data:")]
+            if len(data_lines) != 1:
+                raise DispatchError("phonecontrol MCP returned a non-JSON response")
+            try:
+                result = json.loads(data_lines[0])
+            except ValueError as exc:
+                raise DispatchError("phonecontrol MCP returned an invalid response") from exc
+        if not isinstance(result, Mapping):
+            raise DispatchError("phonecontrol MCP returned an invalid response")
         if "error" in result:
             raise DispatchError("phonecontrol MCP returned an error")
-        return result.get("result", result)
+        inner = result.get("result", result)
+        if not isinstance(inner, Mapping):
+            raise DispatchError("phonecontrol MCP returned an invalid result")
+        return inner
+
+    def call_tool(self, tool_name: str, arguments: Mapping[str, Any]) -> Any:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": next(self._ids),
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": dict(arguments)},
+        }
+        return self._request(payload)
 
 
 class XianyuDispatcher:
@@ -303,9 +362,17 @@ class XianyuDispatcher:
             if not isinstance(arguments, Mapping):
                 raise DispatchError("phonecontrol arguments must be an object")
             return self.phone.call_tool(decision.phone_tool, arguments)
-        raise DispatchError(
-            "hybrid execution needs an explicit follow-up UI step; use plan output to run the API stage, then phonecontrol"
-        )
+        if self.api is None or self.phone is None or decision.api_operation is None or decision.phone_tool is None:
+            raise DispatchError("hybrid execution requires both configured adapters")
+        api_result = self.api.call(decision.api_operation, task)
+        phone_stage = task.get("phone_stage")
+        phone_arguments: Any = task.get("phone_arguments") or {}
+        if isinstance(phone_stage, Mapping):
+            phone_arguments = phone_stage.get("arguments") or phone_arguments
+        if not isinstance(phone_arguments, Mapping):
+            raise DispatchError("phonecontrol arguments must be an object")
+        phone_result = self.phone.call_tool(decision.phone_tool, phone_arguments)
+        return {"route": ROUTE_HYBRID, "api": api_result, "phonecontrol": phone_result}
 
 
 def _load_task(args: argparse.Namespace) -> Dict[str, Any]:

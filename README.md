@@ -29,4 +29,29 @@ python scripts/xianyu_dispatch.py --task-json '{"operation":"get_item_info","ite
 
 执行需要外部写入的任务时，必须显式增加 `--execute --confirm-write`。适配器环境变量和四个项目的边界见 [references/integration_contract.md](references/integration_contract.md)。
 
+常见路由：
+
+- `get_item_info`、`refresh_token`、`upload_media`、`publish_listing`：优先 XianYuApis，不启动手机控制。
+- `screen_state`、`find_node`、`tap`、`type_text`：走 phonecontrol。
+- `publish_listing` 加 `requires_visual_confirmation: true`：先调用 API，再用 `phone_stage` 做屏幕核验。
+- `group_broadcast_touch`：走定制 Android MCP 的群控工具；工具内部先尝试 STUN/P2P，失败后回退 HTTP/内网穿透。
+
+混合任务示例（默认仍只生成计划）：
+
+```json
+{
+  "operation": "publish_listing",
+  "title": "二手相机",
+  "images": ["/safe/path/camera.jpg"],
+  "price": 1200,
+  "requires_visual_confirmation": true,
+  "phone_stage": {
+    "tool": "android_get_screen_state",
+    "arguments": {"include_screenshot": true}
+  }
+}
+```
+
+真正执行混合任务时，API 阶段和手机核验阶段会按顺序执行，并且仍要求 `--confirm-write`。
+
 不要把个人账号、密码、Cookie、验证码、历史执行日志或完整个人数据放入技能包。
