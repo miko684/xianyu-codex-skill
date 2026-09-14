@@ -1,11 +1,27 @@
 ---
 name: xianyusj-phonecontrol
-description: "通过 phonecontrol 安全执行闲鱼商品创建、编辑和发布，并在项目本地维护可复用的手机控制记忆与逐动作计时日志。"
+description: "作为闲鱼管理智能中心，优先用 XianYuApis 处理结构化任务，必要时分流到 phonecontrol，并维护可复用的手机控制记忆与逐动作计时日志。"
 ---
 
-# 闲鱼 Phonecontrol 综合技能
+# 闲鱼管理智能中心
 
-本技能把闲鱼专用流程和通用 phonecontrol 控制规范合并为一个可移植入口。它适用于用户明确要求在闲鱼创建、编辑、完善或发布商品的任务；其中通用控制规则也覆盖浏览器、相册和其他手机应用的辅助操作。
+本技能是四个项目之间的编排层：结构化闲鱼能力优先走 `XianYuApis`，只有需要真实屏幕、无障碍或视觉核验时才调用 phonecontrol。它适用于查询、商品管理、消息处理和需要手机 UI 的闲鱼任务；通用控制规则也覆盖浏览器、相册和其他手机应用的辅助操作。
+
+## 自动分流
+
+任务开始先根据目标和所需证据选择执行后端，不要因为安装了 phonecontrol 就默认使用手机：
+
+- `api`：商品详情、登录态刷新、媒体上传、接口发布等结构化任务，使用 `scripts/xianyu_dispatch.py` 的 XianYuApis 适配器。
+- `phonecontrol`：读取当前屏幕、处理验证码/双开实例、选择相册、验证缩略图或确认最终页面，使用 Android MCP 的 `/mcp` 接口。
+- `hybrid`：API 负责准备或提交，phonecontrol 负责必须的视觉步骤和成功核验。
+
+先生成计划：
+
+```text
+python scripts/xianyu_dispatch.py --task-json '{"operation":"get_item_info","item_id":"..."}'
+```
+
+默认只输出计划，不访问闲鱼或手机。执行外部写操作必须显式使用 `--execute --confirm-write`，并继续遵守用户是否明确授权发布/发送的判断。完整边界、环境变量和组件版本见 [references/integration_contract.md](references/integration_contract.md)。
 
 ## 首次运行与运行状态
 
@@ -40,7 +56,7 @@ python scripts/ensure_runtime_state.py --runtime-dir .xianyusj
 
 ## 闲鱼任务入口
 
-闲鱼任务的图片顺序、普通闲置商品、服务商品、价格输入、发布核验和停止条件全部按 `references/xianyu_sop.md` 执行。
+手机 UI 路径下，闲鱼任务的图片顺序、普通闲置商品、服务商品、价格输入、发布核验和停止条件全部按 `references/xianyu_sop.md` 执行。API 路径不跳过用户授权、写操作确认和必要的结果核验。
 
 - 用户只要求准备或编辑时，不擅自点击最终发布。
 - 只有用户明确要求上架或发布时才提交。
@@ -49,6 +65,6 @@ python scripts/ensure_runtime_state.py --runtime-dir .xianyusj
 
 ## 外部依赖与可移植性
 
-本技能不捆绑 phonecontrol MCP 服务器，也不假设特定手机、账号、网络地址或浏览器登录状态。接收方需要自行配置可用的 phonecontrol 工具；图片中转脚本只处理本地工作区文件，端口和访问地址以运行时输出为准。
+本技能不捆绑 XianYuApis、phonecontrol MCP 服务器或 Android APK，也不假设特定手机、账号、网络地址或浏览器登录状态。接收方按环境配置 XianYuApis 项目路径、受保护的 Cookie 文件和 phonecontrol MCP 端点；图片中转脚本只处理本地工作区文件，端口和访问地址以运行时输出为准。
 
 不要把旧的 `phonecontrol_memory.md`、`task_execution_log.csv`、日志或历史商品草稿复制进发布包。若需要迁移经验，只提炼并脱敏后放入参考文件。

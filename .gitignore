@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.xianyusj/
+.env
+.env.*
+*.cookies.json
+cookies.json

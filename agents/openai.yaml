@@ -1,4 +1,4 @@
 interface:
-  display_name: "Xianyu Phonecontrol Assistant"
-  short_description: "Use phonecontrol to operate Xianyu safely"
-  default_prompt: "Use $xianyusj-phonecontrol to operate Xianyu with local memory and verified phonecontrol steps."
+  display_name: "Xianyu Management Center"
+  short_description: "Route Xianyu tasks through API or phonecontrol"
+  default_prompt: "Use $xianyusj-phonecontrol to route Xianyu work to XianYuApis first and use verified phonecontrol steps when UI evidence is required."
